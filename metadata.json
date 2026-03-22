@@ -1,0 +1,7 @@
+{
+  "name": "Copy of حمدي الهواري",
+  "description": "Real-time AI translation app for meetings, supporting all languages and Arabic dialects.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

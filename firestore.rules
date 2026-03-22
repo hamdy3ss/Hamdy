@@ -1,0 +1,135 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (matches uid)
+    // Fields:
+    //   - uid: string (required) - User ID
+    //   - email: string (required) - User email
+    //   - displayName: string (optional) - User display name
+    //   - photoURL: string (optional) - User photo URL
+    //   - role: string (required) - User role ('user' or 'admin')
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // Collection: scores
+    // Document ID: {scoreId} (auto-generated)
+    // Fields:
+    //   - uid: string (required) - User ID
+    //   - game: string (required) - Game name
+    //   - score: number (required) - Score achieved
+    //   - language: string (required) - Target language
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+    
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+    
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.email == "medoo98275@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+    
+    function isPositive(field) {
+      return request.resource.data[field] is number && request.resource.data[field] >= 0;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    
+    function isValidUser(data) {
+      let allowedKeys = ['uid', 'email', 'displayName', 'photoURL', 'role', 'createdAt'];
+      return request.resource.data.keys().hasOnly(allowedKeys) &&
+             hasRequiredFields(['uid', 'email', 'role', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             data.email is string && isValidEmail(data.email) && data.email.size() < 150 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500)) &&
+             data.role in ['user', 'admin'] &&
+             data.createdAt is timestamp;
+    }
+    
+    function isValidScore(data) {
+      let allowedKeys = ['uid', 'game', 'score', 'language', 'createdAt'];
+      return request.resource.data.keys().hasOnly(allowedKeys) &&
+             hasRequiredFields(['uid', 'game', 'score', 'language', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             data.game is string && data.game.size() > 0 && data.game.size() < 100 &&
+             data.score is number && data.score >= 0 &&
+             data.language is string && data.language.size() > 0 && data.language.size() < 50 &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && 
+                       isOwner(userId) && 
+                       isValidUser(request.resource.data) && 
+                       uidUnchanged() &&
+                       ((request.resource.data.role == 'user') || isAdmin());
+      allow update: if isAuthenticated() && 
+                       isOwner(userId) && 
+                       isValidUser(request.resource.data) && 
+                       uidNotModified() &&
+                       request.resource.data.createdAt == resource.data.createdAt &&
+                       ((request.resource.data.role == resource.data.role) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /scores/{scoreId} {
+      // Users can read their own scores, admins can read all
+      allow read: if (isAuthenticated() && resource.data.uid == request.auth.uid) || isAdmin();
+      
+      // Users can create their own scores
+      allow create: if isAuthenticated() && 
+                       isValidScore(request.resource.data) && 
+                       request.resource.data.uid == request.auth.uid;
+                       
+      // Scores should not be updated or deleted by users
+      allow update, delete: if isAdmin();
+    }
+  }
+}
